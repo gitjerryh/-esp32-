@@ -1,0 +1,53 @@
+from machine import Pin, ADC, PWM, SoftI2C  
+import time  
+from ssd1306 import SSD1306_I2C  
+  
+# 模拟量  
+ps2_y = ADC(Pin(2))  
+ps2_y.atten(ADC.ATTN_11DB)  # 配置测量量程为3.3V  
+  
+i2c = SoftI2C(sda=Pin(21), scl=Pin(22))  
+oled = SSD1306_I2C(128, 64, i2c, addr=0x3c)  
+  
+p15 = Pin(15, Pin.IN)  
+p2 = PWM(Pin(4))  # 舵机PWM控制引脚  
+p2.freq(50)  # 设置PWM频率  
+  
+def update_oled(val_y, message):  
+    oled.fill(0)  # 清屏，背景黑色  
+    oled.text(message, 0, 0)  # 显示消息  
+    oled.text("%.2fPPM" % val_y, 0, 25)  # 显示浓度  
+    oled.show()  
+  
+def move_servo(degrees):  
+    if degrees == 0:  
+        p2.duty_u16(1638)  # 0度  
+    elif degrees == 90:  
+        p2.duty_u16(4915)  # 90度  
+    elif degrees == 180:  
+        p2.duty_u16(8100)  # 180度  
+  
+# 循环检测  
+while True:  
+    val_y = ps2_y.read()  # 读取模拟量值  
+    light = p15.value()  # 读取数字量值  
+    print(val_y, light)  
+    time.sleep(0.1)  
+      
+    if light == 0:  
+        print("检测到危险气体，请远离！")  
+        update_oled(val_y, "Fire!")  # 调用函数更新OLED显示  
+          
+        # 在这里控制舵机  
+        move_servo(180)  # 例如，让舵机转到180度  
+          
+        # 可以选择让舵机等待一段时间再复位  
+        time.sleep(1)  
+        move_servo(0)  # 让舵机回到初始位置  
+  
+    else:  
+        update_oled(val_y, "Safe")  # 如果没有危险气体，显示安全信息  
+  
+# 注意：通常我们不会在主循环中调用p2.deinit()，因为这会导致PWM对象被销毁，之后无法再次使用。  
+# 如果需要在程序结束时停止PWM，可以在程序结束前调用p2.deinit()。
+
