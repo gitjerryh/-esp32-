@@ -29,8 +29,8 @@ buzzer = Pin(26, Pin.OUT)
 # 初始化键盘矩阵
 row_pins = [19, 18, 5, 17]
 col_pins = [16, 4, 0, 15]
-row_list = [Pin(pin, Pin.OUT) for pin in row_pins]
-col_list = [Pin(pin, Pin.IN, Pin.PULL_DOWN) for pin in col_pins]
+row_list = [Pin(pin, Pin.IN, Pin.PULL_DOWN) for pin in row_pins]
+col_list = [Pin(pin, Pin.OUT) for pin in col_pins]
 
 names = [
     ["1", "2", "3", "A"],
@@ -53,15 +53,15 @@ def set_servo_angle(angle):
 
 def read_keyboard():
     global input_password
-    for i, row in enumerate(row_list):
-        for temp in row_list:
-            temp.value(0)
-        row.value(1)
-        time.sleep_ms(10)
+    for i, col in enumerate(col_list):
+        col.value(1)
+        time.sleep_ms(10)  # 延迟去抖动
 
-        for j, col in enumerate(col_list):
-            if col.value() == 1:
-                return names[i][j]
+        for j, row in enumerate(row_list):
+            if row.value() == 1:
+                col.value(0)
+                return names[j][i]
+        col.value(0)
     return None
 
 def check_password():
@@ -109,7 +109,7 @@ def update_display(mq3_value, distance):
 
 while True:
     key = read_keyboard()
-    if key:
+    if key is not None:  # 只有在按下按键时才处理
         input_password += key
         check_password()
     
@@ -117,5 +117,4 @@ while True:
     update_display(mq3_value, distance)
     
     time.sleep(0.1)
-
 
