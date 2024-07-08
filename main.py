@@ -1,0 +1,121 @@
+from machine import Pin, SoftI2C, PWM, ADC
+import time
+from ssd1306 import SSD1306_I2C
+from hcsrx import HCSRX
+
+# 初始化 OLED 屏幕
+i2c = SoftI2C(sda=Pin(21), scl=Pin(22))
+oled = SSD1306_I2C(128, 64, i2c, addr=0x3c)
+
+# 初始化舵机
+SERVO_PIN = 2
+servo = PWM(Pin(SERVO_PIN), freq=50)
+
+# 初始化 MQ-3 传感器
+MQ3_PIN = 13
+ALCOHOL_THRESHOLD = 4094
+adc = ADC(Pin(MQ3_PIN))
+adc.atten(ADC.ATTN_11DB)
+adc.width(ADC.WIDTH_12BIT)
+
+# 初始化超声波传感器
+trig = Pin(12, Pin.OUT)
+echo = Pin(14, Pin.IN, Pin.PULL_UP)
+hcsr = HCSRX(trig, echo)
+
+# 初始化蜂鸣器
+buzzer = Pin(26, Pin.OUT)
+
+# 初始化键盘矩阵
+row_pins = [19, 18, 5, 17]
+col_pins = [16, 4, 0, 15]
+row_list = [Pin(pin, Pin.OUT) for pin in row_pins]
+col_list = [Pin(pin, Pin.IN, Pin.PULL_DOWN) for pin in col_pins]
+
+names = [
+    ["1", "2", "3", "A"],
+    ["4", "5", "6", "B"],
+    ["7", "8", "9", "C"],
+    ["*", "0", "#", "D"]
+]
+
+# 设置密码
+correct_password = "12345"
+input_password = ""
+
+def set_servo_angle(angle):
+    if angle == 0:
+        servo.duty_u16(1638)  # 0度
+    elif angle == 90:
+        servo.duty_u16(4915)  # 90度
+    elif angle == 180:
+        servo.duty_u16(8192)  # 180度
+
+def read_keyboard():
+    global input_password
+    for i, row in enumerate(row_list):
+        for temp in row_list:
+            temp.value(0)
+        row.value(1)
+        time.sleep_ms(10)
+
+        for j, col in enumerate(col_list):
+            if col.value() == 1:
+                return names[i][j]
+    return None
+
+def check_password():
+    global input_password
+    if len(input_password) == 5:
+        if input_password == correct_password:
+            set_servo_angle(180)
+            oled.fill(0)
+            oled.text("Correct", 0, 0)
+            oled.show()
+            time.sleep(6)
+            set_servo_angle(0)
+        else:
+            oled.fill(0)
+            oled.text("Incorrect", 0, 0)
+            oled.show()
+            time.sleep(2)
+        input_password = ""
+
+def read_mq3_and_distance():
+    sum_values = sum(adc.read() for _ in range(50))
+    average_value = sum_values / 50
+    distance = hcsr.Gethcsr(1)
+    return average_value, distance
+
+def update_display(mq3_value, distance):
+    oled.fill(0)
+    oled.text("MQ-3: " + str(int(mq3_value)), 0, 0)
+    oled.text("Dist: %.2f cm" % distance, 0, 16)
+    
+    if mq3_value > ALCOHOL_THRESHOLD:
+        set_servo_angle(180)
+        oled.text("Drunk driving", 0, 32)
+    else:
+        set_servo_angle(0)
+        oled.text("Drive safely", 0, 32)
+    
+    if distance < 10:
+        buzzer.value(0)  # 蜂鸣器开启
+    else:
+        buzzer.value(1)  # 蜂鸣器关闭
+    
+    oled.text("Pass: " + "*" * len(input_password), 0, 48)
+    oled.show()
+
+while True:
+    key = read_keyboard()
+    if key:
+        input_password += key
+        check_password()
+    
+    mq3_value, distance = read_mq3_and_distance()
+    update_display(mq3_value, distance)
+    
+    time.sleep(0.1)
+
+
