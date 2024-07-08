@@ -1,0 +1,13 @@
+from machine import Pin,I2C
+import time
+ 
+#创建I2C对象LM75A
+i2c = I2C(0,scl = Pin(12),sda = Pin(13),freq = 400000)
+ 
+def main():
+    # 输出I2C设备地址：73 49，73为十进制，49为十六进制
+    print("%s %x"%(i2c.scan()[0],i2c.scan()[0]))  
+    
+    
+if __name__ == "__main__":
+    main()
