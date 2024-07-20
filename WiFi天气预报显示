@@ -1,0 +1,102 @@
+#include <Arduino.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <ArduinoJson.h>
+#include <U8g2lib.h>
+ 
+#define WIDTH 128
+#define HEIGHT 64
+#define OLED_SCA 13
+#define OLED_SCK 18
+#define OLED_REST 15
+ 
+//基于u8g2库i2c协议构造结构体u8g2
+U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0,OLED_REST,OLED_SCK,OLED_SCA);
+//WIFI账号密码设置
+const char* ssid = "meec-wifi";
+const char* password = "syzxaaaa";
+ 
+//预设接口地址 城市 API接口密钥
+String url = "http://apis.juhe.cn/simpleWeather/query";
+String city = "广州";
+String key = "77dfa34f7b5cb8fe4b1340690f11800a";
+ 
+unsigned int temp;
+String info;
+int aqi;
+ 
+void setup() {
+ //u8g2（OLED）初始化
+  u8g2.begin();
+  //u8g2库字体使能
+  u8g2.enableUTF8Print();
+ //初始化串口
+ Serial.begin(9600);
+  // 连接 WiFi
+  WiFi.begin(ssid, password);
+  Serial.print("正在连接 Wi-Fi");
+  // 检测是否连接成功
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+    }
+  Serial.println("连接成功");
+  Serial.print("IP 地址：");
+  Serial.println(WiFi.localIP());
+ 
+  // 创建 HTTPClient 对象
+  HTTPClient http;
+  // 发送GET请求
+  http.begin(url+"?city="+city+"&key="+key);
+  int httpCode = http.GET();
+  // 获取响应状态码
+  Serial.printf("HTTP 状态码: %d\n", httpCode);
+  // 获取响应正文
+  String response = http.getString();
+  //Serial.println("响应数据");
+  //Serial.println(response);
+  http.end();
+ 
+  // 创建 DynamicJsonDocument 对象
+  DynamicJsonDocument doc(1024);
+  // 解析 JSON 数据
+  deserializeJson(doc, response);
+  // 从解析后的 JSON 文档中获取值
+  temp = doc["result"]["realtime"]["temperature"].as<unsigned int>();
+  info = doc["result"]["realtime"]["info"].as<String>();
+  aqi = doc["result"]["realtime"]["aqi"].as<int>();
+  Serial.println("广州");
+  Serial.printf("温度: %d\n", temp);
+  Serial.printf("天气: %s\n", info);
+  Serial.printf("空气指数: %d\n", aqi);
+ 
+}
+ 
+void loop() {
+//等待数据延时
+delay(3000);
+//清除显示
+u8g2.clearBuffer();
+//切换中文GB字体
+u8g2.setFont(u8g2_font_wqy14_t_gb2312);
+u8g2.setFontDirection(0);
+//设置光标位置并显示数据
+u8g2.setCursor(0,15);
+u8g2.print("广州 ");
+u8g2.print("温度：");
+u8g2.print(temp);
+u8g2.print("℃");
+u8g2.setCursor(0,35);
+u8g2.print("天气：");
+u8g2.print(info);
+u8g2.setCursor(0,55);
+u8g2.print("空气指数：");
+u8g2.print(aqi);
+//选择字体大小并绘制图案
+u8g2.setFont(u8g2_font_open_iconic_weather_4x_t);
+u8g2.drawGlyph(90,60,0x0045);  
+//显示绘制内容
+u8g2.sendBuffer();
+}
+ 
+ 
