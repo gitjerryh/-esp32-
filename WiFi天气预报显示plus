@@ -1,9 +1,12 @@
 #include <Arduino.h>
-#include "WiFi.h"
-#include "ArduinoJson.h"
-#include "HTTPClient.h"
+#include <WiFi.h>
+#include <WiFiManager.h>
+#include <ArduinoJson.h>
+#include <HTTPClient.h>
+#include <SPIFFS.h>
 #include "weatherpicture.h"
 #include <U8g2lib.h>
+#include <WebServer.h>
 
 #ifdef U8X8_HAVE_HW_SPI
 #include <SPI.h>
@@ -12,79 +15,149 @@
 #include <Wire.h>
 #endif
 
-// OLED硬件初始化
-U8G2_SSD1306_128X64_NONAME_F_SW_I2C u8g2(U8G2_R0, /* clock=*/ SCL, /* data=*/ SDA, /* reset=*/ U8X8_PIN_NONE);   // All Boards without Reset of the Display
+// OLED初始化
+U8G2_SSD1306_128X64_NONAME_F_SW_I2C u8g2(U8G2_R0, SCL, SDA, U8X8_PIN_NONE);
 
-// ------------------------WIFI连接信息---------------------------------//
-const char* ssid = "meec-wifi"; // wifi name
-const char* password = "syzxaaaa"; // wifi password
+// 网络时间配置
+const char *ntpServer = "pool.ntp.org";
+const long gmtOffset_sec = 8 * 3600;
+const int daylightOffset_sec = 0;
 
-//-------------------------网络时间获取----------------------------------//
-const char *ntpServer = "pool.ntp.org"; // 网络时间服务器
-const long gmtOffset_sec = 8 * 3600; // 时区设置函数，东八区（UTC/GMT+8:00）写成8*3600   
-const int daylightOffset_sec = 0;   // 夏令时填写3600，否则填0
+// 配置参数
+String cityName = "guangzhou"; // 默认城市
+String apiKey = "SBsr6-grugCYr1GgQ"; // API密钥
 
-//==========================函数声明====================================//
-void WiFi_Connect();
+// Web服务器，端口80
+WebServer server(80);
+
+// 函数声明
+void setupSpiffs();
+void setupWiFiManager();
+void handleRoot();
+void handleSave();
 void ParserJson();
 void OLEDDisplay(String cityName, String weather, String temperature, int code_int);
 void printLocalTime();
 
-// WiFi connect function
-void WiFi_Connect(){
-    WiFi.begin(ssid, password);
-    // Connection state judgment
-    while(WiFi.status() != WL_CONNECTED){  
-        delay(1000);
-        Serial.println("Connecting to WiFi...");
+// 配置页面HTML
+const char* configPage = R"(
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset='utf-8'>
+    <meta name='viewport' content='width=device-width, initial-scale=1'>
+    <title>天气站配置</title>
+    <style>
+        body { font-family: Arial; padding: 20px; max-width: 600px; margin: 0 auto; }
+        input { width: 100%; padding: 5px; margin: 5px 0; }
+        button { background: #0078D7; color: white; border: none; padding: 10px; width: 100%; }
+    </style>
+</head>
+<body>
+    <h2>天气站配置</h2>
+    <form action='/save' method='post'>
+        <p>城市名称：<input type='text' name='city' value='%CITY%'></p>
+        <p>API密钥：<input type='text' name='apikey' value='%APIKEY%'></p>
+        <button type='submit'>保存配置</button>
+    </form>
+    <p><button onclick='location.href="/wifi"'>配置WiFi连接</button></p>
+</body>
+</html>
+)";
 
-        /**********屏幕显示wifi连接状态*************/
+void setupSpiffs() {
+    if (!SPIFFS.begin(true)) {
+        Serial.println("SPIFFS挂载失败");
+        return;
+    }
+
+    // 读取保存的配置
+    if (SPIFFS.exists("/config.json")) {
+        File configFile = SPIFFS.open("/config.json", "r");
+        if (configFile) {
+            StaticJsonDocument<200> doc;
+            DeserializationError error = deserializeJson(doc, configFile);
+            if (!error) {
+                cityName = doc["city"].as<String>();
+                apiKey = doc["apikey"].as<String>();
+            }
+            configFile.close();
+        }
+    }
+}
+
+void setupWiFiManager() {
+    WiFiManager wm;
+    
+    // 自定义AP
+    wm.setConfigPortalTimeout(180); // 3分钟超时
+    wm.autoConnect("WeatherStation-AP", "12345678");
+    
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("WiFi连接成功");
         u8g2.clearBuffer();
         u8g2.setFont(u8g2_font_wqy12_t_gb2312);
         u8g2.setCursor(0,16);
-        u8g2.print("wifi连接中");
+        u8g2.print("WiFi连接成功");
         u8g2.sendBuffer();
     }
-
-    Serial.println("Connected to the WiFi network");
-    u8g2.clearBuffer();
-    u8g2.setFont(u8g2_font_wqy12_t_gb2312);
-    u8g2.setCursor(0,16);
-    u8g2.print("连接wifi成功");
-    u8g2.sendBuffer();
 }
 
-// 获取Json报文并解析
-void ParserJson(){
-    HTTPClient http;
-    http.begin("https://api.seniverse.com/v3/weather/now.json?key=SBsr6-grugCYr1GgQ&location=guangzhou&language=zh-Hans&unit=c"); // Specify the URL
-    int httpCode = http.GET(); // Make the request
-    if (httpCode > 0) { // Check for the returning code
-        String payload = http.getString();
-        Serial.println(httpCode);
-        Serial.println(payload);
+void handleRoot() {
+    String html = String(configPage);
+    html.replace("%CITY%", cityName);
+    html.replace("%APIKEY%", apiKey);
+    server.send(200, "text/html", html);
+}
 
-        StaticJsonDocument<1024> doc; 
-        DeserializationError error = deserializeJson(doc, payload);
-
-        if (error) {
-            Serial.println("JSON parsing failed!");
+void handleSave() {
+    if (server.method() == HTTP_POST) {
+        String newCity = server.arg("city");
+        String newApiKey = server.arg("apikey");
+        
+        // 保存到SPIFFS
+        StaticJsonDocument<200> doc;
+        doc["city"] = newCity;
+        doc["apikey"] = newApiKey;
+        
+        File configFile = SPIFFS.open("/config.json", "w");
+        if (configFile) {
+            serializeJson(doc, configFile);
+            configFile.close();
+            
+            cityName = newCity;
+            apiKey = newApiKey;
+            
+            server.send(200, "text/html", "保存成功！<br><a href='/'>返回</a>");
         } else {
-            JsonObject obj1 = doc["results"][0];  // new 一个对象存储访问result信息
-            String cityName = obj1["location"]["name"].as<String>();
+            server.send(500, "text/html", "保存失败！<br><a href='/'>返回</a>");
+        }
+    }
+}
+
+void ParserJson() {
+    String url = "https://api.seniverse.com/v3/weather/now.json?key=" + apiKey + 
+                 "&location=" + cityName + "&language=zh-Hans&unit=c";
+    
+    HTTPClient http;
+    http.begin(url);
+    int httpCode = http.GET();
+    
+    if (httpCode > 0) {
+        String payload = http.getString();
+        StaticJsonDocument<1024> doc;
+        DeserializationError error = deserializeJson(doc, payload);
+        
+        if (!error) {
+            JsonObject obj1 = doc["results"][0];
+            String displayCity = obj1["location"]["name"].as<String>();
             String weather = obj1["now"]["text"].as<String>();
-            String code = obj1["now"]["code"].as<String>();
             String temperature = obj1["now"]["temperature"].as<String>();
             int code_int = obj1["now"]["code"].as<int>();
-            OLEDDisplay(cityName, weather, temperature, code_int);  // 屏幕显示报文信息
-            Serial.println(cityName);
-            Serial.println(code);
-            Serial.println(temperature);
+            OLEDDisplay(displayCity, weather, temperature, code_int);
         }
-    } else {
-        Serial.println("Error on HTTP request");
     }
-    http.end(); // Free the resources
+    http.end();
 }
 
 // 屏幕绘制信息
@@ -165,20 +238,24 @@ void printLocalTime(){
 void setup() {
     Serial.begin(115200);
     delay(1000);
+    
     u8g2.begin();
     u8g2.enableUTF8Print();
-
-    WiFi_Connect();
-
-    // 从网络时间服务器上获取并设置时间
-    // 获取成功后芯片会使用RTC时钟保持时间的更新
+    
+    setupSpiffs();
+    setupWiFiManager();
+    
+    // 配置Web服务器路由
+    server.on("/", handleRoot);
+    server.on("/save", handleSave);
+    server.begin();
+    
     configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-
-    // 尝试立即获取时间
     printLocalTime();
 }
 
 void loop() {
+    server.handleClient();
     ParserJson();
-    delay(3000);  // 知心天气API访问限制 20次/min
+    delay(3000);
 }
